@@ -9,6 +9,7 @@ local const = {
   cmake_generate_options = { "-DCMAKE_EXPORT_COMPILE_COMMANDS=1" }, -- this will be passed when invoke `CMakeGenerate`
   cmake_build_options = {}, -- this will be passed when invoke `CMakeBuild`
   cmake_show_disabled_build_presets = true,
+  cmake_save_before_run = true, -- true runs :wall; function(context) can implement project-specific save policy
   cmake_build_directory = function()
     if osys.iswin32 then
       return "out\\${variant:buildType}"
@@ -32,6 +33,12 @@ local const = {
     quickfix = true,
     diagnostics = true,
     open_quickfix = true,
+  },
+  ctest_diagnostics = {
+    enabled = false, -- parse failed CTest output into quickfix entries
+    quickfix = true,
+    open_quickfix = true,
+    title_prefix = "CTest failures: ",
   },
   cmake_workflow = {
     enabled = true,

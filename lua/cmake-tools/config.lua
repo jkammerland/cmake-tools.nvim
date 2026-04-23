@@ -16,6 +16,7 @@ local kits = require("cmake-tools.kits")
 ---@field build_options string[]
 ---@field show_disabled_build_presets boolean
 ---@field ctest_show_labels boolean
+---@field ctest_diagnostics table
 
 ---@class Config
 ---@field build_directory Path?
@@ -53,6 +54,7 @@ function Config:new(const)
       build_options = {},
       show_disabled_build_presets = true,
       ctest_show_labels = false,
+      ctest_diagnostics = {},
     }, -- general config
     target_settings = {}, -- target specific config
     env_script = " ",
@@ -68,6 +70,7 @@ function Config:new(const)
 
   obj.base_settings.show_disabled_build_presets = const.cmake_show_disabled_build_presets
   obj.base_settings.ctest_show_labels = const.ctest_show_labels
+  obj.base_settings.ctest_diagnostics = const.ctest_diagnostics
 
   obj.executor = const.cmake_executor
   obj.runner = const.cmake_runner
@@ -179,6 +182,11 @@ end
 ---@return boolean
 function Config:ctest_show_labels()
   return self.base_settings.ctest_show_labels
+end
+
+---@return table
+function Config:ctest_diagnostics()
+  return self.base_settings.ctest_diagnostics or {}
 end
 
 ---@return cmake.Result

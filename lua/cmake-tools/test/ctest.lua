@@ -1,4 +1,5 @@
 local Job = require("plenary.job")
+local ctest_diagnostics = require("cmake-tools.ctest_diagnostics")
 local utils = require("cmake-tools.utils")
 
 local ctest = {
@@ -92,7 +93,17 @@ function ctest.run(ctest_command, env, config, opt)
     table.insert(args, opt.args)
   end
 
-  utils.run(ctest_command, config.env_script, env, args, config.cwd, config.runner, nil)
+  local hooks = opt.hooks
+  local diagnostics_opts = type(config.ctest_diagnostics) == "function" and config:ctest_diagnostics()
+    or {}
+  if not hooks and diagnostics_opts.enabled then
+    hooks = ctest_diagnostics.command_hooks(vim.tbl_extend("force", diagnostics_opts, {
+      title = (diagnostics_opts.title_prefix or "CTest failures: ") .. ctest_command .. " " .. table.concat(args, " "),
+      cwd = config.cwd,
+    }))
+  end
+
+  utils.run(ctest_command, config.env_script, env, args, config.cwd, config.runner, opt.callback, hooks)
 end
 
 function ctest.stop()

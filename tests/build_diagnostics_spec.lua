@@ -1,4 +1,38 @@
 describe("build diagnostics", function()
+  it("keeps table output entries as separate lines", function()
+    local build_diagnostics = require("cmake-tools.build_diagnostics")
+    local capture = build_diagnostics.new_capture()
+
+    build_diagnostics.capture(capture, {
+      "include/example.h:2:5: error: broken contract",
+      "include/example.h:3:1: warning: check this",
+    })
+
+    local lines = build_diagnostics.finish(capture)
+    assert.equals(2, #lines)
+    assert.equals("include/example.h:2:5: error: broken contract", lines[1])
+    assert.equals("include/example.h:3:1: warning: check this", lines[2])
+  end)
+
+  it("joins split table output fragments before parsing", function()
+    local build_diagnostics = require("cmake-tools.build_diagnostics")
+    local capture = build_diagnostics.new_capture()
+
+    build_diagnostics.capture(capture, { "include/example.h:2:5: er" })
+    build_diagnostics.capture(capture, { "ror: broken contract", "" })
+    build_diagnostics.capture(capture, { "ninja progress" })
+    build_diagnostics.capture(capture, { "" })
+
+    local lines = build_diagnostics.finish(capture)
+    assert.equals(2, #lines)
+    assert.equals("include/example.h:2:5: error: broken contract", lines[1])
+    assert.equals("ninja progress", lines[2])
+
+    local items = build_diagnostics.parse_build_quickfix_items(lines)
+    assert.equals(1, #items)
+    assert.equals("E", items[1].type)
+  end)
+
   it("parses compiler output and applies diagnostics to source buffers", function()
     local root = vim.fn.tempname()
     local include_dir = vim.fs.joinpath(root, "include")

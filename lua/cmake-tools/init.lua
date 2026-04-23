@@ -44,6 +44,7 @@ function cmake.setup(values)
   )
 
   require("cmake-tools.notification").setup(const.cmake_notifications)
+  utils.set_save_before_run(const.cmake_save_before_run)
 
   config = Config:new(const)
   cwd = vim.loop.cwd()
@@ -1589,6 +1590,7 @@ function cmake.run_test(opt, callback)
       local run_opt = vim.tbl_extend("force", opt, {
         preset = preset_name,
         build_dir = build_dir,
+        callback = callback,
       })
 
       if selected.type == Type.LABEL then

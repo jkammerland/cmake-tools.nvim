@@ -72,6 +72,8 @@ function M.capture(capture, out, err)
       return
     end
 
+    local original_len = #entries
+    local has_trailing_boundary = entries[original_len] == ""
     local pending = capture[pending_key]
     if pending then
       entries[1] = pending .. entries[1]
@@ -79,8 +81,10 @@ function M.capture(capture, out, err)
     end
 
     local last = entries[#entries]
-    if last == "" then
-      entries[#entries] = nil
+    if has_trailing_boundary then
+      if original_len > 1 or not pending then
+        entries[original_len] = nil
+      end
     elseif type(last) == "string" and last ~= "" then
       capture[pending_key] = last
       entries[#entries] = nil

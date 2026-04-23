@@ -9,6 +9,12 @@ local scratch = require("cmake-tools.scratch")
 ---@alias runner_conf {name:string, opts:table}
 
 local utils = {}
+local save_before_run = true
+
+---@param value boolean|fun(context: table): boolean, string?
+function utils.set_save_before_run(value)
+  save_before_run = value == nil and true or value
+end
 
 function utils.get_cmake_configuration(cwd)
   local cmakelists = Path:new(cwd, "CMakeLists.txt")
@@ -196,14 +202,30 @@ function utils.has_active_job(runner_data, executor_data)
   -- or utils.get_runner(runner_data.name).has_active_job(runner_data.opts)
 end
 
+local function output_entries(data)
+  if type(data) == "string" then
+    return { data }
+  end
+  if type(data) ~= "table" then
+    return {}
+  end
+
+  local entries = {}
+  for _, value in ipairs(data) do
+    if type(value) == "string" then
+      entries[#entries + 1] = value
+    end
+  end
+  return entries
+end
+
 local notify_update_line = function(ntfy)
   return function(out, err)
     if not ntfy.enabled then
       return
     end
-    local line = err and err or out
-    if line ~= nil then
-      if line and line:match("^%[%s*%d+%s*%%]") then -- only show lines containing build progress e.g [ 12%]
+    for _, line in ipairs(output_entries(err or out)) do
+      if line:match("^%[%s*%d+%s*%%]") then -- only show lines containing build progress e.g [ 12%]
         ntfy:notify(line, err and "warn" or "info")
         ntfy:startSpinner()
       end
@@ -235,6 +257,49 @@ local function on_output_with_hooks(ntfy, hooks)
   end
 end
 
+local function save_before_job(context)
+  if save_before_run == false then
+    return true
+  end
+
+  if type(save_before_run) == "function" then
+    local ok, result, err = pcall(save_before_run, context)
+    if not ok then
+      return false, tostring(result)
+    end
+    if result == false then
+      return false, err
+    end
+    return true
+  end
+
+  local ok, err = pcall(vim.cmd, "silent wall")
+  if not ok then
+    return false, tostring(err)
+  end
+  return true
+end
+
+local function notify_save_failure(message)
+  vim.notify(message or "Failed to save buffers", vim.log.levels.ERROR, { title = "CMake" })
+end
+
+local function result_for_exit_code(cmd, args, cwd, code, detailed)
+  if code == 0 then
+    return Result:new(Types.SUCCESS, nil, nil)
+  end
+
+  if not detailed then
+    return Result:new(Types.CMAKE_RUN_FAILED, nil, "Process exited with code " .. code)
+  end
+
+  return Result:new(
+    Types.CMAKE_RUN_FAILED,
+    nil,
+    string.format("Process %s %s (cwd=%s) exited with code %d", cmd, table.concat(args, " "), cwd, code)
+  )
+end
+
 ---Run a command using specified executor, this is used by generate, build, clean, install, etc.
 ---@param cmd string the executable to execute
 ---@param env_script string environment setup script
@@ -246,8 +311,14 @@ end
 ---@param hooks? {on_output:function?, after_exit:function?} optional process hooks
 ---@return nil
 function utils.run(cmd, env_script, env, args, cwd, runner, callback, hooks)
-  -- save all
-  vim.cmd("silent exec " .. '"wall"')
+  local ok_save, save_err = save_before_job({ kind = "runner", cmd = cmd, args = args, cwd = cwd })
+  if not ok_save then
+    notify_save_failure(save_err)
+    if type(callback) == "function" then
+      callback(Result:new(Types.CMAKE_RUN_FAILED, nil, save_err or "Failed to save buffers"))
+    end
+    return
+  end
 
   local ntfy = notification:new("runner")
 
@@ -271,11 +342,7 @@ function utils.run(cmd, env_script, env, args, cwd, runner, callback, hooks)
     end
     ntfy:notify(msg, level, { icon = icon, timeout = 3000 })
     if type(callback) == "function" then
-      if code == 0 then
-        callback(Result:new(Types.SUCCESS, nil, nil))
-      else
-        callback(Result:new(Types.CMAKE_RUN_FAILED, nil, "Process exited with code " .. code))
-      end
+      callback(result_for_exit_code(cmd, args, cwd, code, false))
     end
   end, on_output_with_hooks(ntfy, hooks))
 end
@@ -291,8 +358,14 @@ end
 ---@param hooks? {on_output:function?, after_exit:function?} optional process hooks
 ---@return nil
 function utils.execute(cmd, env_script, env, args, cwd, executor, callback, hooks)
-  -- save all
-  vim.cmd("silent exec " .. '"wall"')
+  local ok_save, save_err = save_before_job({ kind = "executor", cmd = cmd, args = args, cwd = cwd })
+  if not ok_save then
+    notify_save_failure(save_err)
+    if type(callback) == "function" then
+      callback(Result:new(Types.CMAKE_RUN_FAILED, nil, save_err or "Failed to save buffers"))
+    end
+    return
+  end
 
   local ntfy = notification:new("executor")
   ntfy:notify(cmd, "info")
@@ -317,23 +390,7 @@ function utils.execute(cmd, env_script, env, args, cwd, executor, callback, hook
       end
       ntfy:notify(msg, level, { icon = icon, timeout = 3000 })
       if type(callback) == "function" then
-        if code == 0 then
-          callback(Result:new(Types.SUCCESS, nil, nil))
-        else
-          callback(
-            Result:new(
-              Types.CMAKE_RUN_FAILED,
-              nil,
-              string.format(
-                "Process %s %s (cwd=%s) exited with code %d",
-                cmd,
-                table.concat(args, " "),
-                cwd,
-                code
-              )
-            )
-          )
-        end
+        callback(result_for_exit_code(cmd, args, cwd, code, true))
       end
     end, on_output_with_hooks(ntfy, hooks))
 end
