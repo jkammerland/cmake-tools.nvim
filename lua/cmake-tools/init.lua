@@ -14,6 +14,7 @@ local environment = require("cmake-tools.environment")
 local file_picker = require("cmake-tools.file_picker")
 local scratch = require("cmake-tools.scratch")
 local Result = require("cmake-tools.result")
+local build_diagnostics = require("cmake-tools.build_diagnostics")
 local Path = require("plenary.path")
 
 local ctest = require("cmake-tools.test.ctest")
@@ -87,6 +88,51 @@ local function get_cmake_configuration_or_notify(callback)
     return nil
   end
   return result
+end
+
+local function normalized_path(path)
+  if type(path) ~= "string" or path == "" then
+    return nil
+  end
+  return vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
+end
+
+local function current_build_dir()
+  if config and type(config.build_directory_path) == "function" then
+    local ok, build_dir = pcall(function()
+      return config:build_directory_path()
+    end)
+    if ok then
+      return normalized_path(build_dir)
+    end
+  end
+  return nil
+end
+
+local function build_diagnostic_hooks(args)
+  local opts = const.cmake_build_diagnostics or {}
+  if opts.enabled ~= true then
+    return nil
+  end
+
+  local hook_opts = vim.tbl_deep_extend("force", {}, opts, {
+    title = const.cmake_command .. " " .. table.concat(args or {}, " "),
+    repo_root = normalized_path(config.cwd),
+    build_dir = current_build_dir(),
+  })
+
+  return build_diagnostics.command_hooks(hook_opts)
+end
+
+local function callback_after_compile_commands_refresh(refresh, callback)
+  return function(result)
+    if result and type(result.is_ok) == "function" and result:is_ok() and refresh then
+      cmake.configure_compile_commands()
+    end
+    if type(callback) == "function" then
+      callback(result)
+    end
+  end
 end
 
 --- Generate build system for this project, much like the `cmake command`
@@ -425,7 +471,12 @@ function cmake.build(opt, callback)
 
   local env = environment.get_build_environment(config)
   local cmd = const.cmake_command
-  return utils.execute(cmd, config.env_script, env, args, config.cwd, config.executor, callback)
+  local hooks = build_diagnostic_hooks(args)
+  local build_callback = callback_after_compile_commands_refresh(
+    const.cmake_compile_commands_options.refresh_after_build,
+    callback
+  )
+  return utils.execute(cmd, config.env_script, env, args, config.cwd, config.executor, build_callback, hooks)
 end
 
 ---@param opt vim.api.keyset.create_user_command.command_args
@@ -983,6 +1034,215 @@ function cmake.select_build_preset(callback)
   end
 end
 
+local function workflow_step_name(workflow, step_type)
+  if type(workflow) ~= "table" then
+    return nil
+  end
+
+  local steps = workflow.steps
+  if type(steps) ~= "table" then
+    return nil
+  end
+
+  for _, step in ipairs(steps) do
+    if
+      type(step) == "table"
+      and step.type == step_type
+      and type(step.name) == "string"
+      and step.name ~= ""
+    then
+      return step.name
+    end
+  end
+
+  return nil
+end
+
+local function workflow_build_preset_name(workflow)
+  if type(workflow) ~= "table" then
+    return nil
+  end
+  if type(workflow.buildPreset) == "string" and workflow.buildPreset ~= "" then
+    return workflow.buildPreset
+  end
+  return workflow_step_name(workflow, "build")
+end
+
+local function workflow_test_preset_name(workflow)
+  if type(workflow) ~= "table" then
+    return nil
+  end
+  if type(workflow.testPreset) == "string" and workflow.testPreset ~= "" then
+    return workflow.testPreset
+  end
+  return workflow_step_name(workflow, "test")
+end
+
+local function workflow_configure_preset_name(presets, workflow)
+  if type(workflow) ~= "table" then
+    return nil
+  end
+  if type(workflow.configurePreset) == "string" and workflow.configurePreset ~= "" then
+    return workflow.configurePreset
+  end
+
+  local configure_preset_name = workflow_step_name(workflow, "configure")
+  if configure_preset_name then
+    return configure_preset_name
+  end
+
+  local build_preset_name = workflow_build_preset_name(workflow)
+  if not build_preset_name then
+    return nil
+  end
+
+  local build_preset = presets:get_build_preset(build_preset_name)
+  return build_preset and build_preset.configurePreset or nil
+end
+
+local function apply_workflow_preset(presets, workflow_name)
+  local workflow = presets:get_workflow_preset(workflow_name, {
+    include_hidden = true,
+    include_disabled = true,
+  })
+  if not workflow then
+    return Result:new_error(
+      Types.CANNOT_FIND_PRESETS_FILE,
+      string.format("Workflow preset not found: %s", workflow_name)
+    )
+  end
+
+  local configure_preset_name = workflow_configure_preset_name(presets, workflow)
+  if configure_preset_name then
+    config.configure_preset = configure_preset_name
+  end
+
+  local build_preset_name = workflow_build_preset_name(workflow)
+  if build_preset_name then
+    config.build_preset = build_preset_name
+  end
+
+  local test_preset_name = workflow_test_preset_name(workflow)
+  if test_preset_name then
+    config.test_preset = test_preset_name
+  end
+
+  config.workflow_preset = workflow_name
+  config:update_build_directory()
+  config:update_build_type()
+  config:update_build_target()
+  _session.save(config.cwd, config)
+
+  return Result:new(Types.SUCCESS, nil, nil)
+end
+
+---@param callback? fun(result: cmake.Result)
+function cmake.select_workflow_preset(callback)
+  callback = type(callback) == "function" and callback or function(_) end
+  if check_active_job_and_notify(callback) then
+    return
+  end
+
+  if get_cmake_configuration_or_notify(callback) == nil then
+    return
+  end
+
+  if not Presets.exists(config.cwd) then
+    callback(
+      Result:new_error(Types.CANNOT_FIND_PRESETS_FILE, "Cannot find CMake[User]Presets file")
+    )
+    log.error("Cannot find CMake[User]Presets.json at Root (" .. config.cwd .. ")!!")
+    return
+  end
+
+  local presets = Presets:parse(config.cwd)
+  local workflow_options = const.cmake_workflow or {}
+  local workflow_preset_names = presets:get_workflow_preset_names({
+    include_hidden = workflow_options.include_hidden,
+    include_disabled = workflow_options.include_disabled,
+  })
+  local format_preset_name = function(p_name)
+    local p = presets:get_workflow_preset(p_name, { include_hidden = true, include_disabled = true })
+    return p and (p.displayName or p.name) or p_name
+  end
+
+  vim.ui.select(
+    workflow_preset_names,
+    { prompt = "Select cmake workflow preset", format_item = format_preset_name },
+    vim.schedule_wrap(function(choice)
+      if not choice then
+        callback(Result:new_error(Types.NOT_SELECT_PRESET, "No workflow preset selected"))
+        return
+      end
+
+      callback(apply_workflow_preset(presets, choice))
+    end)
+  )
+end
+
+---@param opt cmake.CommandOpts
+---@param callback? fun(result: cmake.Result)
+function cmake.run_workflow_preset(opt, callback)
+  callback = callback or function() end
+  opt = opt or {}
+
+  if const.cmake_workflow and const.cmake_workflow.enabled == false then
+    callback(Result:new_error(Types.CMAKE_RUN_FAILED, "CMake workflow presets are disabled"))
+    return
+  end
+
+  if check_active_job_and_notify(callback) then
+    return
+  end
+
+  if get_cmake_configuration_or_notify(callback) == nil then
+    return
+  end
+
+  if not Presets.exists(config.cwd) then
+    callback(
+      Result:new_error(Types.CANNOT_FIND_PRESETS_FILE, "Cannot find CMake[User]Presets file")
+    )
+    log.error("Cannot find CMake[User]Presets.json at Root (" .. config.cwd .. ")!!")
+    return
+  end
+
+  local preset = opt.args
+  if type(preset) ~= "string" or preset == "" then
+    preset = opt.fargs and opt.fargs[1] or nil
+  end
+  if type(preset) ~= "string" or preset == "" then
+    preset = config.workflow_preset
+  end
+
+  local presets = Presets:parse(config.cwd)
+  if type(preset) ~= "string" or preset == "" then
+    return cmake.select_workflow_preset(function(select_result)
+      if not select_result:is_ok() then
+        callback(select_result)
+        return
+      end
+      cmake.run_workflow_preset({ args = config.workflow_preset, fargs = { config.workflow_preset } }, callback)
+    end)
+  end
+
+  local apply_result = apply_workflow_preset(presets, preset)
+  if not apply_result:is_ok() then
+    callback(apply_result)
+    return
+  end
+
+  local args = { "--workflow", "--preset", preset }
+  local env = environment.get_build_environment(config)
+  local cmd = const.cmake_command
+  local hooks = build_diagnostic_hooks(args)
+  local workflow_callback = callback_after_compile_commands_refresh(
+    const.cmake_compile_commands_options.refresh_after_workflow,
+    callback
+  )
+  return utils.run(cmd, config.env_script, env, args, config.cwd, config.runner, workflow_callback, hooks)
+end
+
 ---@param regenerate boolean
 ---@param callback? fun(result: cmake.Result)
 function cmake.select_build_target(regenerate, callback)
@@ -1494,6 +1754,11 @@ function cmake.get_test_preset()
   return config.test_preset
 end
 
+---@return string?
+function cmake.get_workflow_preset()
+  return config.workflow_preset
+end
+
 ---@return Path?
 function cmake.get_build_directory()
   return config.build_directory
@@ -1554,7 +1819,10 @@ function cmake.copy_compile_commands()
     target = target()
   end
   local destination = target .. "/compile_commands.json"
-  utils.copyfile(source, destination)
+  if const.cmake_compile_commands_options.create_target_dir then
+    vim.fn.mkdir(target, "p")
+  end
+  return utils.copyfile(source, destination)
 end
 
 function cmake.compile_commands_from_soft_link()
@@ -1568,7 +1836,14 @@ function cmake.compile_commands_from_soft_link()
     target = target()
   end
   local destination = target .. "/compile_commands.json"
-  utils.softlink(source, destination)
+  if const.cmake_compile_commands_options.create_target_dir then
+    vim.fn.mkdir(target, "p")
+  end
+  return utils.softlink(source, destination)
+end
+
+function cmake.sync_compile_commands()
+  return cmake.configure_compile_commands()
 end
 
 function cmake.compile_commands_from_lsp()

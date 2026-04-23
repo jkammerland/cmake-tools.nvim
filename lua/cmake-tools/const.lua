@@ -23,6 +23,20 @@ local const = {
     -- none:      this will make this option ignored
     ---@type string|fun(): string
     target = vim.loop.cwd, -- path or function returning path to directory, this is used only if action == "soft_link" or action == "copy"
+    create_target_dir = false, -- create the target directory before copying/linking compile_commands.json
+    refresh_after_build = false, -- refresh compile_commands.json after successful CMakeBuild
+    refresh_after_workflow = false, -- refresh compile_commands.json after successful CMakeRunWorkflowPreset
+  },
+  cmake_build_diagnostics = {
+    enabled = false, -- parse build output into quickfix and diagnostics when using terminal-style executors
+    quickfix = true,
+    diagnostics = true,
+    open_quickfix = true,
+  },
+  cmake_workflow = {
+    enabled = true,
+    include_hidden = true,
+    include_disabled = false,
   },
   cmake_kits_path = nil, -- this is used to specify global cmake kits path, see CMakeKits for detailed usage
   cmake_variants_message = {

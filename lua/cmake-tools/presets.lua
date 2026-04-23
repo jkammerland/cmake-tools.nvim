@@ -227,6 +227,12 @@ function Presets:get_build_preset_names(opts)
   return ret
 end
 
+---@param opts table?
+---@return string[]
+function Presets:get_workflow_preset_names(opts)
+  return get_preset_names(self.workflowPresets, opts)
+end
+
 local function get_preset(name, tbl, opts)
   local include_hidden = opts and opts.include_hidden
   local include_disabled = opts and opts.include_disabled
@@ -262,6 +268,13 @@ end
 ---@return BuildPreset?
 function Presets:get_build_preset(name, opts)
   return get_preset(name, self.buildPresets, { include_hidden = true, include_disabled = true })
+end
+
+---@param name string
+---@param opts table?
+---@return table?
+function Presets:get_workflow_preset(name, opts)
+  return get_preset(name, self.workflowPresets, opts)
 end
 
 ---@param cwd string

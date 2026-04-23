@@ -1,11 +1,15 @@
 #!/bin/bash
 # Copied from https://github.com/nvim-neotest/neotest/blob/master/scripts/test
 tempfile=$(mktemp)
+plenary_path="deps/plenary.nvim"
+if [[ ! -d "${plenary_path}" && -d "${HOME}/.local/share/nvim/lazy/plenary.nvim" ]]; then
+  plenary_path="${HOME}/.local/share/nvim/lazy/plenary.nvim"
+fi
 
 if [[ -n $1 ]]; then
-  nvim --headless --noplugin -u tests/minimal_init.vim -c "PlenaryBustedFile $1" | tee "${tempfile}"
+  nvim --headless --noplugin -u NONE --cmd "set rtp+=${plenary_path}" --cmd "set rtp+=." -c "runtime plugin/plenary.vim" -c "PlenaryBustedFile $1" | tee "${tempfile}"
 else
-  nvim --headless --noplugin -u tests/minimal_init.vim -c "PlenaryBustedDirectory tests/ {minimal_init = 'tests/minimal_init.vim'}" | tee "${tempfile}"
+  nvim --headless --noplugin -u NONE --cmd "set rtp+=${plenary_path}" --cmd "set rtp+=." -c "runtime plugin/plenary.vim" -c "PlenaryBustedDirectory tests/ {minimal_init = 'tests/minimal_init.vim'}" | tee "${tempfile}"
 fi
 
 # Plenary doesn't emit exit code 1 when tests have errors during setup

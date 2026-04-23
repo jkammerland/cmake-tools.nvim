@@ -62,4 +62,22 @@ describe("utils.run", function()
     assert.equals(1, stub_notification.start_calls)
     assert.equals(1, stub_notification.stop_calls)
   end)
+
+  it("calls optional output and exit hooks", function()
+    local utils = require("cmake-tools.utils")
+    local output = {}
+    local exits = {}
+
+    utils.run("ctest", "", {}, {}, vim.loop.cwd(), { name = "fake", opts = {} }, nil, {
+      on_output = function(out, err)
+        table.insert(output, { out = out, err = err })
+      end,
+      after_exit = function(code)
+        table.insert(exits, code)
+      end,
+    })
+
+    assert.equals("[ 50%] Running test", output[1].out)
+    assert.equals(0, exits[1])
+  end)
 end)

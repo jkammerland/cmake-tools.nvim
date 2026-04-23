@@ -29,6 +29,7 @@ local kits = require("cmake-tools.kits")
 ---@field configure_preset string?
 ---@field build_preset string?
 ---@field test_preset string?
+---@field workflow_preset string?
 ---@field selected_test string?
 ---@field base_settings Config.BaseSettings
 ---@field target_settings table

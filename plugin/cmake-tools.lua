@@ -217,6 +217,26 @@ vim.api.nvim_create_user_command(
   }
 )
 
+--- CMake select workflow preset
+vim.api.nvim_create_user_command(
+  "CMakeSelectWorkflowPreset", -- name
+  cmake_tools.select_workflow_preset, -- command
+  { -- opts
+    nargs = 0,
+    desc = "CMake select workflow preset",
+  }
+)
+
+--- CMake run workflow preset
+vim.api.nvim_create_user_command(
+  "CMakeRunWorkflowPreset", -- name
+  cmake_tools.run_workflow_preset, -- command
+  { -- opts
+    nargs = "?",
+    desc = "CMake run workflow preset",
+  }
+)
+
 --- CMake select build target
 vim.api.nvim_create_user_command(
   "CMakeSelectBuildTarget", -- name
@@ -274,6 +294,16 @@ vim.api.nvim_create_user_command(
   { -- opts
     nargs = "?",
     desc = "CMake select build dir",
+  }
+)
+
+--- CMake sync compile_commands.json
+vim.api.nvim_create_user_command(
+  "CMakeSyncCompileCommands", -- name
+  cmake_tools.sync_compile_commands, -- command
+  { -- opts
+    nargs = 0,
+    desc = "CMake sync compile_commands.json",
   }
 )
 

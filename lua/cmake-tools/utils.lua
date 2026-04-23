@@ -84,42 +84,55 @@ function utils.deepcopy(orig, copies)
 end
 
 function utils.copyfile(src, target)
-  if utils.file_exists(src) then
-    -- if we don't always use terminal
-    local cmd = table.concat({
-      "exec",
-      "'!cmake -E copy",
-      utils.shell_quote(src),
-      utils.shell_quote(target) .. "'",
-    }, " ")
-    vim.cmd(cmd)
+  if not utils.file_exists(src) then
+    return false
   end
+
+  local destination = vim.fs.normalize(target)
+  local parent = vim.fs.dirname(destination)
+  if type(parent) == "string" and parent ~= "" then
+    vim.fn.mkdir(parent, "p")
+  end
+
+  local uv = vim.uv or vim.loop
+  local ok, err = uv.fs_copyfile(vim.fs.normalize(src), destination)
+  if ok == nil or ok == false then
+    return false, err
+  end
+
+  return true
 end
 
 function utils.softlink(src, target)
   if not utils.file_exists(src) then
-    return
+    return false
   end
 
-  local stat = vim.loop.fs_lstat(target)
+  local destination = vim.fs.normalize(target)
+  local parent = vim.fs.dirname(destination)
+  if type(parent) == "string" and parent ~= "" then
+    vim.fn.mkdir(parent, "p")
+  end
+
+  local stat = vim.loop.fs_lstat(destination)
   if stat then
     if stat.type == "link" then
-      if vim.loop.fs_readlink(target) == src then
-        return
+      if vim.loop.fs_readlink(destination) == src then
+        return true
       end
-    else
-      -- target is a regular file, remove it first
-      os.remove(target)
     end
+    -- target is a regular file or a stale link, remove it first
+    os.remove(destination)
   end
 
   local cmd = table.concat({
     "exec",
     "'!cmake -E create_symlink",
     utils.shell_quote(src),
-    utils.shell_quote(target) .. "'",
+    utils.shell_quote(destination) .. "'",
   }, " ")
   vim.cmd(cmd)
+  return true
 end
 
 function utils.shell_quote(str)
@@ -190,11 +203,35 @@ local notify_update_line = function(ntfy)
     end
     local line = err and err or out
     if line ~= nil then
-      if line and vim.fn.match(line, "^%[%s*(%d+)%s*%%%]") then -- only show lines containing build progress e.g [ 12%]
+      if line and line:match("^%[%s*%d+%s*%%]") then -- only show lines containing build progress e.g [ 12%]
         ntfy:notify(line, err and "warn" or "info")
         ntfy:startSpinner()
       end
     end
+  end
+end
+
+local function call_hook(hooks, name, ...)
+  if type(hooks) ~= "table" or type(hooks[name]) ~= "function" then
+    return
+  end
+
+  local ok, err = pcall(hooks[name], ...)
+  if not ok then
+    vim.schedule(function()
+      vim.notify(
+        string.format("cmake-tools hook %s failed: %s", name, tostring(err)),
+        vim.log.levels.WARN
+      )
+    end)
+  end
+end
+
+local function on_output_with_hooks(ntfy, hooks)
+  local update_notify = notify_update_line(ntfy)
+  return function(out, err)
+    call_hook(hooks, "on_output", out, err)
+    update_notify(out, err)
   end
 end
 
@@ -206,8 +243,9 @@ end
 ---@param cwd string the directory to run in
 ---@param runner runner_conf the executor or runner
 ---@param callback nil|function extra arguments, f.e on_success is a callback to be called when the process finishes
+---@param hooks? {on_output:function?, after_exit:function?} optional process hooks
 ---@return nil
-function utils.run(cmd, env_script, env, args, cwd, runner, callback)
+function utils.run(cmd, env_script, env, args, cwd, runner, callback, hooks)
   -- save all
   vim.cmd("silent exec " .. '"wall"')
 
@@ -222,6 +260,7 @@ function utils.run(cmd, env_script, env, args, cwd, runner, callback)
   end
 
   utils.get_runner(runner.name).run(cmd, env_script, env, args, cwd, runner.opts, function(code)
+    call_hook(hooks, "after_exit", code, { cmd = cmd, args = args, cwd = cwd })
     ntfy:stopSpinner()
     local msg = "Exited with code " .. code
     local icon = ""
@@ -238,7 +277,7 @@ function utils.run(cmd, env_script, env, args, cwd, runner, callback)
         callback(Result:new(Types.CMAKE_RUN_FAILED, nil, "Process exited with code " .. code))
       end
     end
-  end, notify_update_line(ntfy))
+  end, on_output_with_hooks(ntfy, hooks))
 end
 
 ---Run a command using specified executor, this is used by generate, build, clean, install, etc.
@@ -249,8 +288,9 @@ end
 ---@param cwd string the directory to run in
 ---@param executor executor_conf the executor or runner
 ---@param callback nil|fun(cmake.Result) extra arguments, f.e on_success is a callback to be called when the process exits with a 0 exit code
+---@param hooks? {on_output:function?, after_exit:function?} optional process hooks
 ---@return nil
-function utils.execute(cmd, env_script, env, args, cwd, executor, callback)
+function utils.execute(cmd, env_script, env, args, cwd, executor, callback, hooks)
   -- save all
   vim.cmd("silent exec " .. '"wall"')
 
@@ -266,6 +306,7 @@ function utils.execute(cmd, env_script, env, args, cwd, executor, callback)
   utils
     .get_executor(executor.name)
     .run(cmd, env_script, env, args, cwd, executor.opts, function(code)
+      call_hook(hooks, "after_exit", code, { cmd = cmd, args = args, cwd = cwd })
       ntfy:stopSpinner()
       local msg = "Exited with code " .. code
       local level = nil -- use the previously defined level
@@ -294,7 +335,7 @@ function utils.execute(cmd, env_script, env, args, cwd, executor, callback)
           )
         end
       end
-    end, notify_update_line(ntfy))
+    end, on_output_with_hooks(ntfy, hooks))
 end
 
 function utils.get_nested(tbl, ...)

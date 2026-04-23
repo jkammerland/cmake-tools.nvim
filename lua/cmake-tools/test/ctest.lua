@@ -86,7 +86,9 @@ function ctest.run(ctest_command, env, config, opt)
     vim.list_extend(args, { "-R", opt.test_name })
   end
 
-  if opt.args then
+  if type(opt.args) == "table" then
+    vim.list_extend(args, opt.args)
+  elseif type(opt.args) == "string" and opt.args ~= "" then
     table.insert(args, opt.args)
   end
 
