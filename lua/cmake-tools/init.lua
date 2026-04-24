@@ -118,7 +118,7 @@ local function build_diagnostic_hooks(args)
   end
 
   local hook_opts = vim.tbl_deep_extend("force", {}, opts, {
-    title = const.cmake_command .. " " .. table.concat(args or {}, " "),
+    title = "CMake build: " .. const.cmake_command .. " " .. table.concat(args or {}, " "),
     repo_root = normalized_path(config.cwd),
     build_dir = current_build_dir(),
   })
