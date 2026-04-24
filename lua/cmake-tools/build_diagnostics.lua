@@ -429,7 +429,9 @@ function M.command_hooks(opts)
       local items = M.parse_build_quickfix_items(lines)
       if code == 0 then
         M.apply_diagnostics({}, opts.repo_root, opts)
-        M.clear_quickfix(title)
+        if opts.quickfix ~= false then
+          M.clear_quickfix(title)
+        end
       elseif #items > 0 then
         M.update_quickfix(items, title, opts.repo_root, opts.build_dir, opts)
       end

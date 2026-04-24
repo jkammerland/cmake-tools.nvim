@@ -68,21 +68,39 @@ local function path_exists(path)
   return type(path) == "string" and path ~= "" and uv.fs_stat(path) ~= nil
 end
 
+local function absolute_path(path)
+  return type(path) == "string" and path ~= "" and (path:sub(1, 1) == "/" or path:match("^%a:[/\\]") ~= nil)
+end
+
+local function normalize_base_path(path, cwd)
+  if type(path) ~= "string" or path == "" then
+    return nil
+  end
+  if absolute_path(path) then
+    return vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
+  end
+  if type(cwd) == "string" and cwd ~= "" then
+    return vim.fs.normalize(vim.fs.joinpath(cwd, path))
+  end
+  return vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
+end
+
 local function resolve_path(filename, cwd, build_dir)
   if type(filename) ~= "string" or filename == "" then
     return nil
   end
 
-  if filename:sub(1, 1) == "/" or filename:match("^%a:[/\\]") then
-    return vim.fs.normalize(vim.fn.fnamemodify(filename, ":p"))
+  if absolute_path(filename) then
+    return normalize_base_path(filename)
   end
 
   local candidates = {}
   if type(cwd) == "string" and cwd ~= "" then
     candidates[#candidates + 1] = vim.fs.normalize(vim.fs.joinpath(cwd, filename))
   end
-  if type(build_dir) == "string" and build_dir ~= "" then
-    candidates[#candidates + 1] = vim.fs.normalize(vim.fs.joinpath(build_dir, filename))
+  local normalized_build_dir = normalize_base_path(build_dir, cwd)
+  if normalized_build_dir then
+    candidates[#candidates + 1] = vim.fs.normalize(vim.fs.joinpath(normalized_build_dir, filename))
   end
 
   for _, candidate in ipairs(candidates) do
@@ -148,7 +166,7 @@ end
 
 local function frame_rank(frame, cwd, build_dir)
   local resolved = resolve_path(frame.filename, cwd, build_dir) or frame.filename
-  local normalized_cwd = resolve_path(cwd, nil)
+  local normalized_cwd = normalize_base_path(cwd)
 
   local sep = package.config:sub(1, 1)
   if normalized_cwd and (resolved == normalized_cwd or resolved:sub(1, #normalized_cwd + 1) == normalized_cwd .. sep) then
@@ -371,7 +389,7 @@ function M.parse_failure_items(lines, cwd, build_dir)
       line = strip_ctest_prefix(line)
       local header, header_kind = sanitizer_header(line)
       if header then
-        if not (header_kind == "SUMMARY" and report) then
+        if header_kind ~= "SUMMARY" then
           finish_report()
           report = {
             text = header,
@@ -389,24 +407,26 @@ function M.parse_failure_items(lines, cwd, build_dir)
         add_report_frame(extract_source_location(line))
       end
 
-      local path, lnum, col, text = line:match("^([A-Za-z]:.-):(%d+):(%d+):%s*(.+)$")
-      if not path then
-        path, lnum, col, text = line:match("^(.-):(%d+):(%d+):%s*(.+)$")
-      end
-      if not path then
-        path, lnum, text = line:match("^(.-)%((%d+)%)%s*:%s*(.+)$")
-      end
-      if not path then
-        path, lnum, text = line:match("^([A-Za-z]:.-):(%d+):%s*(.+)$")
-      end
-      if not path then
-        path, lnum, text = line:match("^(.-):(%d+):%s*(.+)$")
-      end
+      if header_kind ~= "SUMMARY" then
+        local path, lnum, col, text = line:match("^([A-Za-z]:.-):(%d+):(%d+):%s*(.+)$")
+        if not path then
+          path, lnum, col, text = line:match("^(.-):(%d+):(%d+):%s*(.+)$")
+        end
+        if not path then
+          path, lnum, text = line:match("^(.-)%((%d+)%)%s*:%s*(.+)$")
+        end
+        if not path then
+          path, lnum, text = line:match("^([A-Za-z]:.-):(%d+):%s*(.+)$")
+        end
+        if not path then
+          path, lnum, text = line:match("^(.-):(%d+):%s*(.+)$")
+        end
 
-      if path and lnum and text then
-        local failure_text = text
-        if is_failure_text(failure_text) then
-          add_item(path, lnum, col, failure_text)
+        if path and lnum and text then
+          local failure_text = text
+          if is_failure_text(failure_text) then
+            add_item(path, lnum, col, failure_text)
+          end
         end
       end
     end
@@ -453,11 +473,15 @@ function M.update_quickfix(items, title, failed, opts)
 end
 
 function M.last_test_log_path(build_dir)
+  return M.last_test_log_path_for_cwd(build_dir, nil)
+end
+
+function M.last_test_log_path_for_cwd(build_dir, cwd)
   if type(build_dir) ~= "string" or build_dir == "" then
     return nil
   end
 
-  local path = build_dir
+  local path = normalize_base_path(build_dir, cwd)
   for _, part in ipairs(LAST_TEST_LOG) do
     path = vim.fs.joinpath(path, part)
   end
@@ -466,7 +490,7 @@ end
 
 function M.import_last_log(build_dir, cwd, opts)
   opts = opts or {}
-  local path = M.last_test_log_path(build_dir)
+  local path = M.last_test_log_path_for_cwd(build_dir, cwd)
   if not path or vim.fn.filereadable(path) ~= 1 then
     return nil, ("CTest LastTest.log not found under %s"):format(build_dir or "<no build dir>")
   end

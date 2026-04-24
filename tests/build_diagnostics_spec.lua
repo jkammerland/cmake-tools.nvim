@@ -107,4 +107,31 @@ describe("build diagnostics", function()
     assert.equals("user quickfix", qf.title)
     assert.equals(1, #qf.items)
   end)
+
+  it("does not clear quickfix after a successful build when quickfix integration is disabled", function()
+    local root = vim.fn.tempname()
+    local include_dir = vim.fs.joinpath(root, "include")
+    vim.fn.mkdir(include_dir, "p")
+    local source = vim.fs.joinpath(include_dir, "example.h")
+    vim.fn.writefile({ "one", "two" }, source)
+
+    local build_diagnostics = require("cmake-tools.build_diagnostics")
+    vim.fn.setqflist({}, "r", {
+      title = "CMake build: cmake --build",
+      items = { { filename = source, lnum = 2, col = 1, text = "keep this" } },
+    })
+
+    local hooks = build_diagnostics.command_hooks({
+      enabled = true,
+      quickfix = false,
+      title = "CMake build: cmake --build",
+      repo_root = root,
+      open_quickfix = false,
+    })
+    hooks.after_exit(0)
+
+    local qf = vim.fn.getqflist({ title = 0, items = 0 })
+    assert.equals("CMake build: cmake --build", qf.title)
+    assert.equals(1, #qf.items)
+  end)
 end)

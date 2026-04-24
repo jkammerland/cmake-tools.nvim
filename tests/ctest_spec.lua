@@ -122,6 +122,25 @@ describe("ctest.run", function()
     assert.equals("LeakSanitizer: Direct leak of 216 byte(s) in 1 object(s) allocated from:", items[1].text)
   end)
 
+  it("resolves relative build directories against the CTest cwd", function()
+    local root = vim.fn.tempname()
+    local build_dir = vim.fs.joinpath(root, "build", "alusan")
+    vim.fn.mkdir(vim.fs.joinpath(root, "tests"), "p")
+    vim.fn.mkdir(vim.fs.joinpath(build_dir, "tests", "gentest", "tests"), "p")
+    local test_file = vim.fs.joinpath(root, "tests", "test_coro.cpp")
+    vim.fn.writefile({ "void test() {}" }, test_file)
+
+    local ctest_diagnostics = require("cmake-tools.ctest_diagnostics")
+    local items = ctest_diagnostics.parse_failure_items({
+      "==2980010==ERROR: LeakSanitizer: detected memory leaks",
+      "Direct leak of 216 byte(s) in 1 object(s) allocated from:",
+      "    #1 0x0000003fa45f in test tests/gentest/tests/../../../../../tests/test_coro.cpp:132",
+    }, root, "build/alusan")
+
+    assert.equals(1, #items)
+    assert.equals(vim.fs.normalize(test_file), items[1].filename)
+  end)
+
   it("parses UBSan runtime errors as CTest quickfix entries", function()
     local root = vim.fn.tempname()
     vim.fn.mkdir(vim.fs.joinpath(root, "tests"), "p")
@@ -137,6 +156,23 @@ describe("ctest.run", function()
     assert.equals(vim.fs.normalize(test_file), items[1].filename)
     assert.equals(2, items[1].lnum)
     assert.equals("runtime error: signed integer overflow", items[1].text)
+  end)
+
+  it("does not duplicate UBSan runtime errors when a summary line repeats the location", function()
+    local root = vim.fn.tempname()
+    vim.fn.mkdir(vim.fs.joinpath(root, "tests"), "p")
+    local test_file = vim.fs.joinpath(root, "tests", "test_ubsan.cpp")
+    vim.fn.writefile({ "int main() {}", "int overflow = 0;" }, test_file)
+
+    local ctest_diagnostics = require("cmake-tools.ctest_diagnostics")
+    local items = ctest_diagnostics.parse_failure_items({
+      "tests/test_ubsan.cpp:2:5: runtime error: signed integer overflow",
+      "SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior tests/test_ubsan.cpp:2:5",
+    }, root)
+
+    assert.equals(1, #items)
+    assert.equals(vim.fs.normalize(test_file), items[1].filename)
+    assert.equals(2, items[1].lnum)
   end)
 
   it("keeps parsed sanitizer diagnostics even when CTest exits successfully", function()
@@ -168,6 +204,7 @@ describe("ctest.run", function()
   it("imports LastTest.log only through the explicit import helper", function()
     local root = vim.fn.tempname()
     local build_dir = vim.fs.joinpath(root, "build", "debug")
+    local relative_build_dir = "build/debug"
     local log_dir = vim.fs.joinpath(build_dir, "Testing", "Temporary")
     vim.fn.mkdir(vim.fs.joinpath(root, "tests"), "p")
     vim.fn.mkdir(log_dir, "p")
@@ -196,7 +233,7 @@ describe("ctest.run", function()
     assert.equals("user quickfix", qf.title)
     assert.equals(1, #qf.items)
 
-    local items, path = ctest_diagnostics.import_last_log(build_dir, root, {
+    local items, path = ctest_diagnostics.import_last_log(relative_build_dir, root, {
       open_quickfix = false,
       title_prefix = "CTest failures: ",
     })
