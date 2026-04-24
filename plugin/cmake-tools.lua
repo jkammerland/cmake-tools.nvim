@@ -316,6 +316,17 @@ vim.api.nvim_create_user_command(
     desc = "CMake run test",
   }
 )
+
+--- Import the latest CTest LastTest.log into quickfix
+vim.api.nvim_create_user_command(
+  "CMakeCTestImportLastLog", -- name
+  cmake_tools.import_last_ctest_log, -- command
+  { -- opts
+    nargs = 0,
+    desc = "CMake import CTest LastTest.log diagnostics",
+  }
+)
+
 --- CMake quick start
 vim.api.nvim_create_user_command(
   "CMakeQuickStart", -- name

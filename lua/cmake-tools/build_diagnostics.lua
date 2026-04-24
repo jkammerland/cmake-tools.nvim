@@ -376,6 +376,27 @@ local function replace_quickfix_items(items, title, idx)
   end
 end
 
+local function current_quickfix_title()
+  local ok, info = pcall(vim.fn.getqflist, { title = 0 })
+  if not ok or type(info) ~= "table" then
+    return nil
+  end
+  return type(info.title) == "string" and info.title or nil
+end
+
+function M.clear_quickfix(title)
+  if type(title) ~= "string" or title == "" then
+    return false
+  end
+  if current_quickfix_title() ~= title then
+    return false
+  end
+
+  vim.fn.setqflist({}, "r", { title = title, items = {} })
+  pcall(vim.cmd, "cclose")
+  return true
+end
+
 function M.update_quickfix(items, title, repo_root, build_dir, opts)
   opts = opts or {}
   local rewritten = M.rewrite_build_quickfix_items(items, repo_root, build_dir)
@@ -408,6 +429,7 @@ function M.command_hooks(opts)
       local items = M.parse_build_quickfix_items(lines)
       if code == 0 then
         M.apply_diagnostics({}, opts.repo_root, opts)
+        M.clear_quickfix(title)
       elseif #items > 0 then
         M.update_quickfix(items, title, opts.repo_root, opts.build_dir, opts)
       end

@@ -15,6 +15,7 @@ local file_picker = require("cmake-tools.file_picker")
 local scratch = require("cmake-tools.scratch")
 local Result = require("cmake-tools.result")
 local build_diagnostics = require("cmake-tools.build_diagnostics")
+local ctest_diagnostics = require("cmake-tools.ctest_diagnostics")
 local Path = require("plenary.path")
 
 local ctest = require("cmake-tools.test.ctest")
@@ -1602,6 +1603,27 @@ function cmake.run_test(opt, callback)
       ctest.run(const.ctest_command, env, config, run_opt)
     end)
   end)
+end
+
+function cmake.import_last_ctest_log()
+  local build_dir = current_build_dir()
+  if not build_dir then
+    return log.error("No active CMake build directory; run CMakeGenerate first")
+  end
+
+  local opts = vim.tbl_deep_extend("force", {}, const.ctest_diagnostics or {}, {
+    title = ((const.ctest_diagnostics or {}).title_prefix or "CTest failures: ") .. "LastTest.log import",
+  })
+  local items, path_or_error = ctest_diagnostics.import_last_log(build_dir, config.cwd, opts)
+  if not items then
+    return log.error(path_or_error)
+  end
+
+  log.warn(("Imported %d stale CTest diagnostic entr%s from %s"):format(
+    #items,
+    #items == 1 and "y" or "ies",
+    path_or_error
+  ))
 end
 
 ---@param opt vim.api.keyset.create_user_command.command_args

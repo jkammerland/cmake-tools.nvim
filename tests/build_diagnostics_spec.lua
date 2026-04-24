@@ -71,4 +71,40 @@ describe("build diagnostics", function()
     build_diagnostics.apply_diagnostics({}, root)
     assert.equals(0, #vim.diagnostic.get(bufnr, { namespace = build_diagnostics.namespace() }))
   end)
+
+  it("clears only owned build quickfix entries after a successful build", function()
+    local root = vim.fn.tempname()
+    local include_dir = vim.fs.joinpath(root, "include")
+    vim.fn.mkdir(include_dir, "p")
+    local source = vim.fs.joinpath(include_dir, "example.h")
+    vim.fn.writefile({ "one", "two" }, source)
+
+    local build_diagnostics = require("cmake-tools.build_diagnostics")
+    vim.fn.setqflist({}, "r", {
+      title = "cmake --build",
+      items = { { filename = source, lnum = 2, col = 1, text = "error: stale" } },
+    })
+
+    local hooks = build_diagnostics.command_hooks({
+      enabled = true,
+      title = "cmake --build",
+      repo_root = root,
+      open_quickfix = false,
+    })
+    hooks.after_exit(0)
+
+    local qf = vim.fn.getqflist({ title = 0, items = 0 })
+    assert.equals("cmake --build", qf.title)
+    assert.equals(0, #qf.items)
+
+    vim.fn.setqflist({}, "r", {
+      title = "user quickfix",
+      items = { { filename = source, lnum = 2, col = 1, text = "keep this" } },
+    })
+    hooks.after_exit(0)
+
+    qf = vim.fn.getqflist({ title = 0, items = 0 })
+    assert.equals("user quickfix", qf.title)
+    assert.equals(1, #qf.items)
+  end)
 end)

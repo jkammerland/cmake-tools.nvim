@@ -100,6 +100,7 @@ function ctest.run(ctest_command, env, config, opt)
     hooks = ctest_diagnostics.command_hooks(vim.tbl_extend("force", diagnostics_opts, {
       title = (diagnostics_opts.title_prefix or "CTest failures: ") .. ctest_command .. " " .. table.concat(args, " "),
       cwd = config.cwd,
+      build_dir = opt.build_dir,
     }))
   end
 
