@@ -122,5 +122,14 @@ describe("workflow presets", function()
     assert.equals(vim.fs.normalize(test_file), vim.api.nvim_buf_get_name(qf.items[1].bufnr))
     assert.equals(132, qf.items[1].lnum)
     assert.equals("LeakSanitizer: Direct leak of 216 byte(s) in 1 object(s) allocated from:", qf.items[1].text)
+
+    local ctest_diagnostics = require("cmake-tools.ctest_diagnostics")
+    local diagnostics = vim.diagnostic.get(vim.fn.bufnr(test_file), {
+      namespace = ctest_diagnostics.namespace(),
+    })
+    assert.equals(1, #diagnostics)
+    assert.equals(131, diagnostics[1].lnum)
+    assert.equals("ctest", diagnostics[1].source)
+    assert.equals("LeakSanitizer: Direct leak of 216 byte(s) in 1 object(s) allocated from:", diagnostics[1].message)
   end)
 end)

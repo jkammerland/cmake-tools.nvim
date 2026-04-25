@@ -37,6 +37,7 @@ local const = {
   ctest_diagnostics = {
     enabled = false, -- parse failed CTest output into quickfix entries
     quickfix = true,
+    diagnostics = true,
     open_quickfix = true,
     title_prefix = "CTest failures: ",
   },

@@ -33,6 +33,21 @@ describe("build diagnostics", function()
     assert.equals("E", items[1].type)
   end)
 
+  it("splits embedded newline output chunks before parsing", function()
+    local build_diagnostics = require("cmake-tools.build_diagnostics")
+    local capture = build_diagnostics.new_capture()
+
+    build_diagnostics.capture(capture, "include/example.h:2:5: error: broken contract\ninclude/example.h:3:1: warning: check this\n")
+
+    local lines = build_diagnostics.finish(capture)
+    assert.equals(2, #lines)
+    assert.equals("include/example.h:2:5: error: broken contract", lines[1])
+    assert.equals("include/example.h:3:1: warning: check this", lines[2])
+
+    local items = build_diagnostics.parse_build_quickfix_items(lines)
+    assert.equals(2, #items)
+  end)
+
   it("parses compiler output and applies diagnostics to source buffers", function()
     local root = vim.fn.tempname()
     local include_dir = vim.fs.joinpath(root, "include")
@@ -69,6 +84,13 @@ describe("build diagnostics", function()
     assert.equals(vim.diagnostic.severity.ERROR, diagnostics[1].severity)
 
     build_diagnostics.apply_diagnostics({}, root)
+    assert.equals(0, #vim.diagnostic.get(bufnr, { namespace = build_diagnostics.namespace() }))
+
+    build_diagnostics.update_quickfix(items, "cmake --build", root, nil, {
+      open_quickfix = false,
+    })
+    assert.equals(2, #vim.diagnostic.get(bufnr, { namespace = build_diagnostics.namespace() }))
+    build_diagnostics.apply_diagnostics({}, root, { diagnostics = false })
     assert.equals(0, #vim.diagnostic.get(bufnr, { namespace = build_diagnostics.namespace() }))
   end)
 

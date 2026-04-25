@@ -96,6 +96,107 @@ describe("ctest.run", function()
     assert.equals("ERROR: CHECK( value ) is NOT correct!", items[1].text)
   end)
 
+  it("splits embedded newline output chunks before parsing", function()
+    local root = vim.fn.tempname()
+    vim.fn.mkdir(vim.fs.joinpath(root, "tests"), "p")
+    local test_file = vim.fs.joinpath(root, "tests", "test_doctest.cpp")
+    vim.fn.writefile({ "TEST_CASE()" }, test_file)
+
+    local ctest_diagnostics = require("cmake-tools.ctest_diagnostics")
+    local capture = ctest_diagnostics.new_capture()
+
+    ctest_diagnostics.capture(
+      capture,
+      "tests/test_doctest.cpp:10: ERROR: CHECK( value ) is NOT correct!\n  values: CHECK( false )\n"
+    )
+
+    local lines = ctest_diagnostics.finish(capture)
+    assert.equals(2, #lines)
+    assert.equals("tests/test_doctest.cpp:10: ERROR: CHECK( value ) is NOT correct!", lines[1])
+
+    local items = ctest_diagnostics.parse_failure_items(lines, root)
+    assert.equals(1, #items)
+    assert.equals(vim.fs.normalize(test_file), items[1].filename)
+    assert.equals(10, items[1].lnum)
+  end)
+
+  it("applies and clears CTest diagnostics from parsed items", function()
+    local root = vim.fn.tempname()
+    vim.fn.mkdir(vim.fs.joinpath(root, "tests"), "p")
+    local test_file = vim.fs.joinpath(root, "tests", "test_coro.cpp")
+    vim.fn.writefile({ "one", "two", "three" }, test_file)
+
+    local ctest_diagnostics = require("cmake-tools.ctest_diagnostics")
+    local items = ctest_diagnostics.parse_failure_items({
+      "==2980010==ERROR: LeakSanitizer: detected memory leaks",
+      "Direct leak of 216 byte(s) in 1 object(s) allocated from:",
+      "    #1 0x0000003fa45f in test tests/test_coro.cpp:2",
+    }, root)
+
+    assert.equals(1, #items)
+    ctest_diagnostics.update_quickfix(items, "CTest failures: ctest --test-dir build/alusan", true, {
+      cwd = root,
+      open_quickfix = false,
+    })
+
+    local bufnr = vim.fn.bufnr(test_file)
+    local diagnostics = vim.diagnostic.get(bufnr, {
+      namespace = ctest_diagnostics.namespace(),
+    })
+    assert.equals(1, #diagnostics)
+    assert.equals(1, diagnostics[1].lnum)
+    assert.equals(vim.diagnostic.severity.ERROR, diagnostics[1].severity)
+    assert.equals("ctest", diagnostics[1].source)
+    assert.equals("LeakSanitizer: Direct leak of 216 byte(s) in 1 object(s) allocated from:", diagnostics[1].message)
+
+    ctest_diagnostics.update_quickfix({}, "CTest failures: ctest --test-dir build/alusan", false, {
+      cwd = root,
+      open_quickfix = false,
+    })
+    assert.equals(0, #vim.diagnostic.get(bufnr, { namespace = ctest_diagnostics.namespace() }))
+
+    ctest_diagnostics.update_quickfix(items, "CTest failures: ctest --test-dir build/alusan", true, {
+      cwd = root,
+      open_quickfix = false,
+    })
+    assert.equals(1, #vim.diagnostic.get(bufnr, { namespace = ctest_diagnostics.namespace() }))
+    ctest_diagnostics.apply_diagnostics({}, {
+      cwd = root,
+      diagnostics = false,
+    })
+    assert.equals(0, #vim.diagnostic.get(bufnr, { namespace = ctest_diagnostics.namespace() }))
+  end)
+
+  it("applies CTest diagnostics when quickfix integration is disabled", function()
+    local root = vim.fn.tempname()
+    vim.fn.mkdir(vim.fs.joinpath(root, "tests"), "p")
+    local test_file = vim.fs.joinpath(root, "tests", "test_doctest.cpp")
+    vim.fn.writefile({ "TEST_CASE()" }, test_file)
+
+    local ctest_diagnostics = require("cmake-tools.ctest_diagnostics")
+    local items = ctest_diagnostics.parse_failure_items({
+      "tests/test_doctest.cpp:1: ERROR: CHECK( value ) is NOT correct!",
+    }, root)
+
+    vim.fn.setqflist({}, "r", {
+      title = "user quickfix",
+      items = { { filename = test_file, lnum = 1, text = "keep user entry" } },
+    })
+    ctest_diagnostics.update_quickfix(items, "CTest failures: ctest --test-dir build/debug", true, {
+      cwd = root,
+      quickfix = false,
+    })
+
+    local qf = vim.fn.getqflist({ title = 0, items = 0 })
+    assert.equals("user quickfix", qf.title)
+    assert.equals(1, #qf.items)
+
+    local diagnostics = vim.diagnostic.get(vim.fn.bufnr(test_file), {
+      namespace = ctest_diagnostics.namespace(),
+    })
+    assert.equals(1, #diagnostics)
+  end)
+
   it("parses sanitizer stack frames and resolves build-relative source paths", function()
     local root = vim.fn.tempname()
     local build_dir = vim.fs.joinpath(root, "build", "alusan")
@@ -244,5 +345,16 @@ describe("ctest.run", function()
     assert.equals("CTest failures: LastTest.log import", qf.title)
     assert.equals(1, #qf.items)
     assert.equals(vim.fs.normalize(test_file), vim.api.nvim_buf_get_name(qf.items[1].bufnr))
+
+    local diagnostics = vim.diagnostic.get(vim.fn.bufnr(test_file), {
+      namespace = ctest_diagnostics.namespace(),
+    })
+    assert.equals(1, #diagnostics)
+
+    ctest_diagnostics.update_quickfix({}, "CTest failures: ctest --test-dir build/debug", false, {
+      cwd = root,
+      open_quickfix = false,
+    })
+    assert.equals(0, #vim.diagnostic.get(vim.fn.bufnr(test_file), { namespace = ctest_diagnostics.namespace() }))
   end)
 end)

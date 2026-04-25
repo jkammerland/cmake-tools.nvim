@@ -1,5 +1,7 @@
 local M = {}
 local uv = vim.uv or vim.loop
+local ns = vim.api.nvim_create_namespace("cmake-tools ctest")
+local tracked_buffers = {}
 
 local DEFAULT_TITLE_PREFIX = "CTest failures: "
 local LAST_TEST_LOG = { "Testing", "Temporary", "LastTest.log" }
@@ -28,9 +30,25 @@ local function strip_ansi(line)
   return line ~= "" and line or nil
 end
 
+local function split_output_string(value)
+  local entries = {}
+  value = value:gsub("\r\n", "\n")
+  local start = 1
+  while true do
+    local next_newline = value:find("\n", start, true)
+    if not next_newline then
+      entries[#entries + 1] = value:sub(start)
+      break
+    end
+    entries[#entries + 1] = value:sub(start, next_newline - 1)
+    start = next_newline + 1
+  end
+  return entries
+end
+
 local function normalize_output_entries(data)
   if type(data) == "string" then
-    return { data }
+    return split_output_string(data)
   end
   if type(data) ~= "table" then
     return {}
@@ -39,7 +57,7 @@ local function normalize_output_entries(data)
   local entries = {}
   for _, value in ipairs(data) do
     if type(value) == "string" then
-      entries[#entries + 1] = value
+      vim.list_extend(entries, split_output_string(value))
     end
   end
   return entries
@@ -66,6 +84,13 @@ end
 
 local function path_exists(path)
   return type(path) == "string" and path ~= "" and uv.fs_stat(path) ~= nil
+end
+
+local function normalize_path(path)
+  if type(path) ~= "string" or path == "" then
+    return nil
+  end
+  return vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
 end
 
 local function absolute_path(path)
@@ -326,6 +351,10 @@ function M.finish(capture)
   return vim.deepcopy(capture.lines)
 end
 
+function M.namespace()
+  return ns
+end
+
 function M.parse_failure_items(lines, cwd, build_dir)
   if type(lines) ~= "table" then
     return {}
@@ -444,24 +473,119 @@ local function current_quickfix_title()
   return type(info.title) == "string" and info.title or nil
 end
 
-function M.update_quickfix(items, title, failed, opts)
+local function raw_quickfix_item_path(item)
+  if type(item) ~= "table" then
+    return nil
+  end
+
+  if type(item.filename) == "string" and item.filename ~= "" then
+    return item.filename
+  end
+
+  local bufnr = tonumber(item.bufnr)
+  if bufnr and bufnr > 0 and vim.api.nvim_buf_is_valid(bufnr) then
+    local name = vim.api.nvim_buf_get_name(bufnr)
+    if type(name) == "string" and name ~= "" then
+      return name
+    end
+  end
+
+  return nil
+end
+
+function M.ctest_diagnostics_from_items(items)
+  local by_path = {}
+
+  for _, item in ipairs(items or {}) do
+    if item.valid ~= 0 and type(item.lnum) == "number" and item.lnum > 0 then
+      local path = normalize_path(raw_quickfix_item_path(item))
+      if path then
+        by_path[path] = by_path[path] or {}
+        by_path[path][#by_path[path] + 1] = {
+          lnum = item.lnum - 1,
+          end_lnum = (type(item.end_lnum) == "number" and item.end_lnum > 0) and (item.end_lnum - 1)
+            or (item.lnum - 1),
+          col = math.max((tonumber(item.col) or 1) - 1, 0),
+          end_col = math.max(tonumber(item.end_col) or tonumber(item.col) or 1, tonumber(item.col) or 1),
+          severity = vim.diagnostic.severity.ERROR,
+          source = "ctest",
+          message = vim.trim(type(item.text) == "string" and item.text or ""),
+        }
+      end
+    end
+  end
+
+  return by_path
+end
+
+function M.clear_diagnostics(opts)
   opts = opts or {}
-  if opts.quickfix == false then
+  local key = opts.cwd or "__global__"
+  for bufnr in pairs(tracked_buffers[key] or {}) do
+    if vim.api.nvim_buf_is_valid(bufnr) then
+      pcall(vim.diagnostic.reset, ns, bufnr)
+    end
+  end
+  tracked_buffers[key] = {}
+end
+
+function M.apply_diagnostics(items, opts)
+  opts = opts or {}
+  M.clear_diagnostics(opts)
+  if opts.diagnostics == false then
     return
   end
+
+  local key = opts.cwd or "__global__"
+
+  local tracked = {}
+  for path, diagnostics in pairs(M.ctest_diagnostics_from_items(items)) do
+    local bufnr = vim.fn.bufadd(path)
+    if bufnr > 0 and vim.api.nvim_buf_is_valid(bufnr) then
+      if vim.fn.bufloaded(bufnr) == 0 then
+        pcall(vim.fn.bufload, bufnr)
+      end
+
+      if vim.api.nvim_buf_is_valid(bufnr) then
+        vim.diagnostic.set(ns, bufnr, diagnostics, {
+          underline = true,
+          virtual_text = false,
+          signs = true,
+          severity_sort = true,
+          update_in_insert = false,
+        })
+        tracked[bufnr] = true
+      end
+    end
+  end
+
+  tracked_buffers[key] = tracked
+end
+
+function M.update_quickfix(items, title, failed, opts)
+  opts = opts or {}
 
   title = (type(title) == "string" and title ~= "") and title
     or ((opts.title_prefix or DEFAULT_TITLE_PREFIX) .. "ctest")
 
   if failed and #items > 0 then
-    vim.fn.setqflist({}, " ", {
-      title = title,
-      items = items,
-    })
-    if opts.open_quickfix ~= false then
-      pcall(vim.cmd, "belowright copen 10")
-      pcall(vim.cmd, "wincmd p")
+    if opts.quickfix ~= false then
+      vim.fn.setqflist({}, " ", {
+        title = title,
+        items = items,
+      })
+      if opts.open_quickfix ~= false then
+        pcall(vim.cmd, "belowright copen 10")
+        pcall(vim.cmd, "wincmd p")
+      end
     end
+    M.apply_diagnostics(items, opts)
+    return
+  end
+
+  M.apply_diagnostics({}, opts)
+
+  if opts.quickfix == false then
     return
   end
 
@@ -497,9 +621,13 @@ function M.import_last_log(build_dir, cwd, opts)
 
   local lines = vim.fn.readfile(path)
   local items = M.parse_failure_items(lines, cwd, build_dir)
-  local title_prefix = opts.title_prefix or DEFAULT_TITLE_PREFIX
-  local title = opts.title or (title_prefix .. "LastTest.log import")
-  M.update_quickfix(items, title, #items > 0, opts)
+  local effective_opts = vim.tbl_extend("force", opts, {
+    cwd = opts.cwd or cwd,
+    build_dir = opts.build_dir or build_dir,
+  })
+  local title_prefix = effective_opts.title_prefix or DEFAULT_TITLE_PREFIX
+  local title = effective_opts.title or (title_prefix .. "LastTest.log import")
+  M.update_quickfix(items, title, #items > 0, effective_opts)
   return items, path
 end
 

@@ -32,9 +32,25 @@ local function strip_ansi(line)
   return line ~= "" and line or nil
 end
 
+local function split_output_string(value)
+  local entries = {}
+  value = value:gsub("\r\n", "\n")
+  local start = 1
+  while true do
+    local next_newline = value:find("\n", start, true)
+    if not next_newline then
+      entries[#entries + 1] = value:sub(start)
+      break
+    end
+    entries[#entries + 1] = value:sub(start, next_newline - 1)
+    start = next_newline + 1
+  end
+  return entries
+end
+
 local function normalize_output_entries(data)
   if type(data) == "string" then
-    return { data }
+    return split_output_string(data)
   end
   if type(data) ~= "table" then
     return {}
@@ -43,7 +59,7 @@ local function normalize_output_entries(data)
   local entries = {}
   for _, value in ipairs(data) do
     if type(value) == "string" then
-      entries[#entries + 1] = value
+      vim.list_extend(entries, split_output_string(value))
     end
   end
   return entries
@@ -326,12 +342,12 @@ end
 
 function M.apply_diagnostics(items, repo_root, opts)
   opts = opts or {}
+  M.clear_diagnostics(repo_root)
   if opts.diagnostics == false then
     return
   end
 
   local key = repo_root or "__global__"
-  M.clear_diagnostics(repo_root)
 
   local tracked = {}
   for path, diags in pairs(M.build_diagnostics_from_items(items)) do
