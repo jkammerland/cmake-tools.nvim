@@ -126,6 +126,52 @@ local function build_diagnostic_hooks(args)
   return build_diagnostics.command_hooks(hook_opts)
 end
 
+local function ctest_diagnostic_hooks(args)
+  local opts = const.ctest_diagnostics or {}
+  if opts.enabled ~= true then
+    return nil
+  end
+
+  local title_prefix = opts.title_prefix or "CTest failures: "
+  local hook_opts = vim.tbl_deep_extend("force", {}, opts, {
+    title = title_prefix .. const.cmake_command .. " " .. table.concat(args or {}, " "),
+    cwd = config.cwd,
+    build_dir = current_build_dir(),
+  })
+
+  return ctest_diagnostics.command_hooks(hook_opts)
+end
+
+local function combine_command_hooks(...)
+  local hooks = {}
+  for _, hook in ipairs({ ... }) do
+    if type(hook) == "table" then
+      hooks[#hooks + 1] = hook
+    end
+  end
+
+  if #hooks == 0 then
+    return nil
+  end
+
+  return {
+    on_output = function(out, err)
+      for _, hook in ipairs(hooks) do
+        if type(hook.on_output) == "function" then
+          hook.on_output(out, err)
+        end
+      end
+    end,
+    after_exit = function(code)
+      for _, hook in ipairs(hooks) do
+        if type(hook.after_exit) == "function" then
+          hook.after_exit(code)
+        end
+      end
+    end,
+  }
+end
+
 local function callback_after_compile_commands_refresh(refresh, callback)
   return function(result)
     if result and type(result.is_ok) == "function" and result:is_ok() and refresh then
@@ -1237,7 +1283,7 @@ function cmake.run_workflow_preset(opt, callback)
   local args = { "--workflow", "--preset", preset }
   local env = environment.get_build_environment(config)
   local cmd = const.cmake_command
-  local hooks = build_diagnostic_hooks(args)
+  local hooks = combine_command_hooks(build_diagnostic_hooks(args), ctest_diagnostic_hooks(args))
   local workflow_callback = callback_after_compile_commands_refresh(
     const.cmake_compile_commands_options.refresh_after_workflow,
     callback
